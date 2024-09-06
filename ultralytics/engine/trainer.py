@@ -23,7 +23,7 @@ from torch import nn, optim
 
 from ultralytics.cfg import get_cfg, get_save_dir
 from ultralytics.data.utils import check_cls_dataset, check_det_dataset
-from ultralytics.nn.tasks import attempt_load_one_weight, attempt_load_weights
+from ultralytics.nn.tasks import attempt_load_one_weight, attempt_load_weights, torch_safe_load
 from ultralytics.utils import (
     DEFAULT_CFG,
     LOCAL_RANK,
@@ -440,6 +440,8 @@ class BaseTrainer:
                 if self.args.save or final_epoch:
                     self.save_model()
                     self.run_callbacks("on_model_save")
+                    best_dict, _ = torch_safe_load(self.best)
+                    print(best_dict['model'])
 
             # Scheduler
             t = time.time()

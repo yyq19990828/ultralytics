@@ -9,13 +9,15 @@ dict = {
     'pretrained': '/home/tyjt/桌面/ultralytics/runs/detect/train8/weights/detect_module_epoch0.pt'
 }
 trainer = CustomTrainer(overrides=dict)
-trainer.get_model(cfg=trainer.model, weights=trainer.args.pretrained)
+# trainer.setup_model()
+# print(trainer.model.names)
+# trainer.get_model(cfg=trainer.model, weights=trainer.args.pretrained)
 
 
 # # %%
 # trainer.model.model[-1]
 
 # %%
-# trainer.train()
+trainer.train()
 
 

@@ -1,3 +1,5 @@
+import re
+from turtle import back
 from ultralytics.nn.tasks import BaseModel, DetectionModel, yaml_model_load, parse_model
 # Ultralytics YOLO 🚀, AGPL-3.0 license
 
@@ -86,50 +88,118 @@ except ImportError:
 
 
 class multihead(BaseModel):
-    def __init__(self, cfg="/home/tyjt/桌面/ultralytics/yolov8-ghost-onlyp2.yaml", ch=3, nc=None, verbose=True):  # model, input channels, number of classes
+    def __init__(self, cfg_list: list, ch=3, verbose=True):  # model, input channels, number of classes
         """Initialize the YOLOv8 detection model with the given config and parameters."""
         super().__init__()
-        self.yaml = cfg if isinstance(cfg, dict) else yaml_model_load(cfg)  # cfg dict
-        # if self.yaml["backbone"][0][2] == "Silence":
-        #     LOGGER.warning(
-        #         "WARNING ⚠️ YOLOv9 `Silence` module is deprecated in favor of nn.Identity. "
-        #         "Please delete local *.pt file and re-download the latest model checkpoint."
-        #     )
-        #     self.yaml["backbone"][0][2] = "nn.Identity"
+        # 如果cfg是list, 则加载多检测头模型
+        self.yaml1 = None #正常检测
+        self.yaml2 = None #黑点检测
+        for cfg in cfg_list:
+            cfg_yaml = yaml_model_load(cfg)  # cfg dict
+            if cfg_yaml["nc"] == 1:
+                self.yaml2 = cfg_yaml
+            else : self.yaml1 = cfg_yaml
 
         # Define model
-        ch = self.yaml["ch"] = self.yaml.get("ch", ch)  # input channels
-        if nc and nc != self.yaml["nc"]:
-            LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
-            self.yaml["nc"] = nc  # override YAML value
-        self.model, self.save = parse_model(deepcopy(self.yaml), ch=ch, verbose=verbose)  # model, savelist
-        self.names = {i: f"{i}" for i in range(self.yaml["nc"])}  # default names dict
-        self.inplace = self.yaml.get("inplace", True)
-        self.end2end = getattr(self.model[-1], "end2end", False)
+        # ch = self.yaml["ch"] = self.yaml.get("ch", ch)  # input channels
+        # if nc and nc != self.yaml1["nc"]:
+        #     LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
+        #     self.yaml1["nc"] = nc  # override YAML value
+        
+        self.model1, self.save1 = parse_model(deepcopy(self.yaml1), ch=ch, verbose=verbose)  # model, savelist
+        self.model2, self.save2 = parse_model(deepcopy(self.yaml2), ch=ch, verbose=verbose)
+        print(self.save1, self.save2)
+
+        # Check if the two models are identical
+        self.backbone = compare_sequential_modules(self.model1[:-1], self.model2[:-1])
+        self.head1 = self.model1[-1:]
+        self.head2 = self.model2[-1:]
+
+
+        self.names1 = {i: f"{i}" for i in range(self.yaml1["nc"])}  # default names dict
+        self.names2 = {i: f"{i}" for i in range(self.yaml2["nc"])}  # default names dict
+
+        # self.inplace = self.yaml.get("inplace", True)
+        # self.end2end = getattr(self.model[-1], "end2end", False)
 
         # Build strides
-        m = self.model[-1]  # Detect()
-        if isinstance(m, Detect):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
-            s = 256  # 2x min stride
-            m.inplace = self.inplace
+        # m = self.model[-1]  # Detect()
+        # if isinstance(m, Detect):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
+        #     s = 256  # 2x min stride
+        #     m.inplace = self.inplace
 
-            def _forward(x):
-                """Performs a forward pass through the model, handling different Detect subclass types accordingly."""
-                if self.end2end:
-                    return self.forward(x)["one2many"]
-                return self.forward(x)[0] if isinstance(m, (Segment, Pose, OBB)) else self.forward(x)
+        #     def _forward(x):
+        #         """Performs a forward pass through the model, handling different Detect subclass types accordingly."""
+        #         if self.end2end:
+        #             return self.forward(x)["one2many"]
+        #         return self.forward(x)[0] if isinstance(m, (Segment, Pose, OBB)) else self.forward(x)
 
-            m.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
-            self.stride = m.stride
-            m.bias_init()  # only run once
-        else:
-            self.stride = torch.Tensor([32])  # default stride for i.e. RTDETR
+        #     m.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
+        #     self.stride = m.stride
+        #     m.bias_init()  # only run once
+        # else:
+        #     self.stride = torch.Tensor([32])  # default stride for i.e. RTDETR
 
-        # Init weights, biases
-        initialize_weights(self)
-        if verbose:
-            self.info()
-            LOGGER.info("")
+        # # Init weights, biases
+        # initialize_weights(self)
+        # if verbose:
+        #     self.info()
+        #     LOGGER.info("")
+
+    def predict(self, x, profile=False, visualize=False, augment=False, embed=None):
+        """
+        Perform a forward pass through the network.
+
+        Args:
+            x (torch.Tensor): The input tensor to the model.
+            profile (bool):  Print the computation time of each layer if True, defaults to False.
+            visualize (bool): Save the feature maps of the model if True, defaults to False.
+            augment (bool): Augment image during prediction, defaults to False.
+            embed (list, optional): A list of feature vectors/embeddings to return.
+
+        Returns:
+            (torch.Tensor): The last output of the model.
+        """
+        if augment:
+            return self._predict_augment(x)
+        return self._predict_once(x, profile, visualize, embed)
+
+    def _predict_once(self, x, profile=False, visualize=False, embed=None):
+        """
+        Perform a forward pass through the network.
+
+        Args:
+            x (torch.Tensor): The input tensor to the model.
+            profile (bool):  Print the computation time of each layer if True, defaults to False.
+            visualize (bool): Save the feature maps of the model if True, defaults to False.
+            embed (list, optional): A list of feature vectors/embeddings to return.
+
+        Returns:
+            (torch.Tensor): The last output of the model.
+        """
+        y, dt, embeddings = [], [], []  # outputs
+        for m in self.backbone:
+            if m.f != -1:  # if not from previous layer
+                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+            if profile:
+                self._profile_one_layer(m, x, dt)
+            x = m(x)  # run
+            y.append(x if m.i in self.save1 or m.i in self.save2 else None)  # save output
+            if visualize:
+                feature_visualization(x, m.type, m.i, save_dir=visualize)
+            if embed and m.i in embed:
+                embeddings.append(nn.functional.adaptive_avg_pool2d(x, (1, 1)).squeeze(-1).squeeze(-1))  # flatten
+                if m.i == max(embed):
+                    return torch.unbind(torch.cat(embeddings, 1), dim=0)
+        for m1, m2 in zip(self.head1, self.head2):
+            if m1.f != -1 or m2.f != -1:  # if not from previous layer
+                x1 = y[m1.f] if isinstance(m1.f, int) else [x if j == -1 else y[j] for j in m1.f]  # from earlier layers
+                x2 = y[m2.f] if isinstance(m2.f, int) else [x if j == -1 else y[j] for j in m2.f]  # from earlier layers
+            # if profile:
+            #     self._profile_one_layer(m, x, dt)
+            # x = m(x) 
+            x1, x2 = m1(x1), m2(x2)
+        return x, [x1, x2]
 
 def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
     """Parse a YOLO model.yaml dictionary into a PyTorch model."""
@@ -249,3 +319,28 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             ch = []
         ch.append(c2)
     return nn.Sequential(*layers), sorted(save)
+
+def compare_sequential_modules(seq1: nn.Sequential, seq2: nn.Sequential):
+    # 检查两个模块的层数是否相同
+    if len(seq1) != len(seq2):
+        raise ValueError("The two nn.Sequential modules have different number of layers.")
+    
+    # 逐层比较两个模块的参数
+    for layer1, layer2 in zip(seq1, seq2):
+        # 比较每一层的参数
+        for param1, param2 in zip(layer1.parameters(), layer2.parameters()):
+            if not param1.shape==param2.shape:
+                raise ValueError("不是相同的backbone")
+    
+    print("是相同结构的backbone.")
+    return seq1
+
+if __name__ == "__main__":
+    cfg1 = r'C:\Users\yyq0828\Desktop\ultralytics\custom_model_config\yolov8-ghost-onlyp2.yaml'
+    cfg2 = r'C:\Users\yyq0828\Desktop\ultralytics\custom_model_config\yolov8-ghost-p3-p5.yaml'
+    model = multihead(cfg_list=[cfg1, cfg2])
+    # 不同的模式产生德不同的输出(训练，推理，导出)
+    model.eval()
+    x = torch.randn(1, 3, 640, 640)
+    backbone_opt, head_opt = model(x)
+    print(backbone_opt.shape, head_opt[0].shape, head_opt[1].shape)

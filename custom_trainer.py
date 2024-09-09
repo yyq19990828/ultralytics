@@ -48,7 +48,6 @@ from ultralytics.utils.torch_utils import (
     torch_distributed_zero_first,
 )
 from ultralytics.nn.tasks import torch_safe_load
-from custom_model import CustomModel
 
 class CustomTrainer(DetectionTrainer):
 
@@ -72,6 +71,8 @@ class CustomTrainer(DetectionTrainer):
             if isinstance(self.args.freeze, int)
             else []
         )
+        
+        # 如果只有一个类别，且类别名称为unknown，则直接冻结除了Detect以外的所有层
         if self.model.nc == 1 and self.model.names['0'] == 'unknown':
             freeze_list = range(len(self.model.model)-1)  # freeze non-output layers
         always_freeze_names = [".dfl"]  # always freeze these layers
@@ -199,7 +200,7 @@ class CustomTrainer(DetectionTrainer):
                 detect_module_buffer)
             serialized_detect_module = detect_module_buffer.getvalue()
             # save best_submodule_epoch, i.e. 'detect_module_epoch3.pt'
-            (self.wdir / f"detect_module_epoch{self.epoch}.pt").write_bytes(serialized_detect_module)  
+            (self.wdir / f"detect_module_epoch{self.epoch}_nc{self.model.nc}.pt").write_bytes(serialized_detect_module)  
 
         # best_dict, _ = torch_safe_load(f"detect_module_epoch{self.epoch}.pt")
         # print(best_dict['model'])

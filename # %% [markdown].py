@@ -1,5 +1,5 @@
 # %%
-from custom_trainer import CustomTrainer
+from ultralytics_dev.costom_modules.custom_trainer import CustomTrainer
 
 dict = {
     'model': '/home/tyjt/桌面/ultralytics/custom_model_config/yolov8-ghost-onlyp2.yaml',
